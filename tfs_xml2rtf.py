@@ -8,6 +8,7 @@ import subprocess
 import glob
 import inspect
 import tqdm
+import math
 
 USAGE="""
 Navigates directory tree and extracts selected information from EPU XML file series.
@@ -17,7 +18,7 @@ USAGE:
 
 """ % ((__file__,)*1)
 
-MODIFIED="Modified 2025 Jan 13"
+MODIFIED="Modified 2025 May 07"
 MAX_VERBOSITY=4
 
 def printvars(variables, quitTF=False, typeTF=False):
@@ -105,7 +106,10 @@ def main(options):
     if verbosity>=2: print()
     if verbosity>=1:
       print(f"Found {len(xml_list)} XML files in {len(dir_list)} directories")
-      if not options.no_scan: print("Scanning first 2 movies for number of frames...")
+      if not options.no_scan:
+        print("Scanning first 2 movies for number of frames...")
+      else:
+        print("Not scanning movies for number of frames...")
       print()
 
   # Initialize
@@ -113,6 +117,8 @@ def main(options):
   max_df=-999.9
   num_frames= None
   movie_format= None
+  min_tilt=+360.0
+  max_tilt=-360.0
 
   do_disable= verbosity!=1 or options.debug
 
@@ -132,37 +138,60 @@ def main(options):
     namespace_shared_str = "{" + namespace_shared_dict['a'] + "}"
     namespace_array_dict = {'a': 'http://schemas.microsoft.com/2003/10/Serialization/Arrays'}
 
+    # InstrumentModel
+    scope_text= find_simple_tag(root, "InstrumentModel", namespace_shared_dict, pad='\t\t\t' if verbosity>=4 else '')
+
+    # Krios name starts with TITAN####
+    if scope_text.startswith("TITAN"):
+      scope_title= "Krios"
+    else:
+      scope_title= scope_text.split('-')[0].title()
+
     # DetectorCommercialName
-    cam_key, cam_tag= find_complex_tag(root, "DetectorCommercialName", namespace_array_dict, parent_key='KeyValueOfstringanyType', pad='\t\t' if verbosity>=4 else '')
+    cam_text= find_complex_tag(root, "DetectorCommercialName", namespace_array_dict, parent_key='KeyValueOfstringanyType', pad='\t\t' if verbosity>=4 else '')
+
+    # Counting
+    count_text= find_complex_tag(root, "ElectronCountingEnabled", namespace_array_dict, parent_key='KeyValueOfstringanyType', pad='\t\t' if verbosity>=4 else '')
 
     # Voltage
-    volt_tag, volt_text= find_simple_tag(root, "AccelerationVoltage", namespace_shared_dict, pad='\t\t\t' if verbosity>=4 else '')
+    volt_text= find_simple_tag(root, "AccelerationVoltage", namespace_shared_dict, pad='\t\t\t' if verbosity>=4 else '')
 
     # Software version
-    sw_tag, sw_text= find_simple_tag(root, "ApplicationSoftware", namespace_shared_dict, pad='\t\t\t' if verbosity>=4 else '')
-    version_tag, version_text= find_simple_tag(root, "ApplicationSoftwareVersion", namespace_shared_dict, pad='\t\t' if verbosity>=4 else '')
+    sw_text= find_simple_tag(root, "ApplicationSoftware", namespace_shared_dict, pad='\t\t\t' if verbosity>=4 else '')
+    version_text= find_simple_tag(root, "ApplicationSoftwareVersion", namespace_shared_dict, pad='\t\t' if verbosity>=4 else '')
 
     # Apertures
-    c1_key, c1_text= find_complex_tag(root, "Aperture[C1].Name", namespace_array_dict, parent_key='KeyValueOfstringanyType', pad='\t\t\t' if verbosity>=4 else '')
-    c2_key, c2_text= find_complex_tag(root, "Aperture[C2].Name", namespace_array_dict, parent_key='KeyValueOfstringanyType', pad='\t\t\t' if verbosity>=4 else '')
-    c3_key, c3_text= find_complex_tag(root, "Aperture[C3].Name", namespace_array_dict, parent_key='KeyValueOfstringanyType', pad='\t\t\t' if verbosity>=4 else '')
+    c1_text= find_complex_tag(root, "Aperture[C1].Name", namespace_array_dict, parent_key='KeyValueOfstringanyType', pad='\t\t\t' if verbosity>=4 else '')
+    c2_text= find_complex_tag(root, "Aperture[C2].Name", namespace_array_dict, parent_key='KeyValueOfstringanyType', pad='\t\t\t' if verbosity>=4 else '')
+    c3_text= find_complex_tag(root, "Aperture[C3].Name", namespace_array_dict, parent_key='KeyValueOfstringanyType', pad='\t\t\t' if verbosity>=4 else '')
+    obj_aperture= find_complex_tag(root, "Aperture[OBJ].Name", namespace_array_dict, parent_key='KeyValueOfstringanyType', pad='\t\t\t' if verbosity>=4 else '')
+    #printvars('obj_aperture',True)
 
     # optics -> SpotIndex
-    spot_tag, spot_text= find_simple_tag(root, "SpotIndex", namespace_shared_dict, pad='\t\t\t\t' if verbosity>=4 else '')
+    spot_text= find_simple_tag(root, "SpotIndex", namespace_shared_dict, pad='\t\t\t\t' if verbosity>=4 else '')
 
     # TemMagnification -> NominalMagnification
-    mag_tag, mag_text= find_simple_tag(root, "NominalMagnification", namespace_shared_dict, pad='\t\t\t' if verbosity>=4 else '')
+    mag_text= find_simple_tag(root, "NominalMagnification", namespace_shared_dict, pad='\t\t\t' if verbosity>=4 else '')
 
     # SpatialScale -> pixelSize -> {x,y} -> numericValue
     apix_element= find_element(root, "pixelSize", namespace_shared_dict, prefix='  ')
     apix_x_element= find_element(apix_element, "x", namespace_shared_dict)
-    apix_x_tag, apix_x_text= find_simple_tag(apix_x_element, "numericValue", namespace_shared_dict, pad='\t\t\t' if verbosity>=4 else '', prefix='x')
+    apix_x_text= find_simple_tag(apix_x_element, "numericValue", namespace_shared_dict, pad='\t\t\t' if verbosity>=4 else '', prefix='x')
     apix_y_element= find_element(apix_element, "y", namespace_shared_dict)
-    apix_y_tag, apix_y_text= find_simple_tag(apix_y_element, "numericValue", namespace_shared_dict, pad='\t\t\t' if verbosity>=4 else '', prefix='y')
+    apix_y_text= find_simple_tag(apix_y_element, "numericValue", namespace_shared_dict, pad='\t\t\t' if verbosity>=4 else '', prefix='y')
     assert apix_x_text==apix_y_text, f"UH OH!! Pixel size in x ({apix_x_text}) doesn't equal in y ({apix_y_text})!"
 
+    # Position -> A (tilt angle)
+    position_element= find_element(root, "Position", namespace_shared_dict, prefix='  ')
+    tilt_radians= find_simple_tag(position_element, "A", namespace_shared_dict, pad='\t\t\t\t\t' if verbosity>=4 else '')
+    tilt_degrees= round(math.degrees( float(tilt_radians) ),1)
+
+    # Check against extrema
+    if min_tilt > tilt_degrees : min_tilt=tilt_degrees
+    if max_tilt < tilt_degrees : max_tilt=tilt_degrees
+
     # AppliedDefocus
-    df_key, df_text= find_complex_tag(root, "AppliedDefocus", namespace_array_dict, parent_key='KeyValueOfstringanyType', pad='\t\t\t' if verbosity>=4 else '')
+    df_text= find_complex_tag(root, "AppliedDefocus", namespace_array_dict, parent_key='KeyValueOfstringanyType', pad='\t\t\t' if verbosity>=4 else '')
 
     # Check against defocus extrema
     df_microns= float(df_text)*1e+6
@@ -170,21 +199,28 @@ def main(options):
     if -max_df > -df_microns : max_df=df_microns
 
     # Detectors[EF-Falcon].TotalDose (UNITS?)
-    f4_dose_key, f4_dose_text= find_complex_tag(root, "Detectors[EF-Falcon].TotalDose", namespace_array_dict, parent_key='KeyValueOfstringanyType', pad='\t' if verbosity>=4 else '')
+    f4_dose_text= find_complex_tag(root, "Detectors[EF-Falcon].TotalDose", namespace_array_dict, parent_key='KeyValueOfstringanyType', pad='\t' if verbosity>=4 else '')
 
     # Dose (UNITS?)
-    custom_dose_key, custom_dose_text= find_complex_tag(root, "Dose", namespace_array_dict, parent_key='KeyValueOfstringanyType', pad='\t\t\t\t\t' if verbosity>=4 else '')
+    custom_dose_text= find_complex_tag(root, "Dose", namespace_array_dict, parent_key='KeyValueOfstringanyType', pad='\t\t\t\t\t' if verbosity>=4 else '')
+
+    # EnergySelectionSlitWidth
+    slit_text= find_simple_tag(root, "EnergySelectionSlitWidth", namespace_shared_dict, pad='\t\t' if verbosity>=4 else '')
 
     # Detectors[EF-Falcon].ExposureTime
     custom_element= find_element(root, "CustomData", namespace_shared_dict)
-    f4_exp_key, f4_exp_text= find_complex_tag(custom_element, "Detectors[EF-Falcon].ExposureTime", namespace_array_dict, parent_key='KeyValueOfstringanyType', pad='\t' if verbosity>=4 else '')
+    f4_exp_text= find_complex_tag(custom_element, "Detectors[EF-Falcon].ExposureTime", namespace_array_dict, parent_key='KeyValueOfstringanyType', pad='\t' if verbosity>=4 else '')
 
     # microscopeData -> acquisition -> camera -> ExposureTime
     camera_element= find_element(root, "camera", namespace_shared_dict)
-    cam_exp_key, cam_exp_text= find_simple_tag(camera_element, "ExposureTime", namespace_shared_dict, pad='\t\t\t\t' if verbosity>=4 else '')
+    cam_exp_text= find_simple_tag(camera_element, "ExposureTime", namespace_shared_dict, pad='\t\t\t\t' if verbosity>=4 else '')
+
+    # Sanity check: Make sure the two exposure times are equal to 2 decimal places
+    assert round( float(f4_exp_text), 2) == round(float(cam_exp_text), 2), f"UH OH!! Exposure time in 'Detectors[EF-Falcon].ExposureTime' ({f4_exp_text}) doesn't equal 'microscopeData -> acquisition -> camera -> ExposureTime' ({cam_exp_text})!"
+    #printvars(['f4_exp_text','cam_exp_text'], True)
 
     # Detectors[EF-Falcon].FrameRate
-    frames_key, frames_text= find_complex_tag(root, "Detectors[EF-Falcon].FrameRate", namespace_array_dict, parent_key='KeyValueOfstringanyType', pad='\t' if verbosity>=4 else '')
+    frames_text= find_complex_tag(root, "Detectors[EF-Falcon].FrameRate", namespace_array_dict, parent_key='KeyValueOfstringanyType', pad='\t' if verbosity>=4 else '')
 
     # Movies might be either EER or TIFF format, try both
     if not options.no_scan:
@@ -235,33 +271,66 @@ def main(options):
   # End directory loop
   if verbosity>=1:
     print(f"\nDefocus range: {max_df:.1f} to {min_df:.1f} um")
+    print(  f"Tilt range: {min_tilt:.1f} to {max_tilt:.1f} degrees")
     if not options.no_scan: print(f"Number of frames: {num_frames}")
 
   # Process text
   sw_and_version= f"{sw_text} v {'.'.join(version_text.split('.', 3)[:3])}"
   kv_str= f"{int(float(volt_text)/1000)} keV"
   aperture_text= f"{c1_text}, {c2_text}, {c3_text}"
-  df_range= f"{max_df:.1f} to {min_df:.1f}"
+  df_range= f"{max_df:.1f} to  {min_df:.1f}"
   frames_text= str(num_frames)
   mag_wx= f"{mag_text[:3]} {mag_text[3:]} x"
   pixel_size= f"{float(apix_x_text)*1e10:.3f}"
+  if min_tilt != max_tilt:
+    tilt_range= f"{min_tilt:.1f} to {max_tilt:.1f}"
+  else:
+    tilt_range= f"{tilt_degrees:.1f}"
+  cam_exp_text= f"{float(cam_exp_text):.2f}"
+  #printvars('tilt_range',True)
 
   # Build RTF
-  rtf_content= generate_rtf_table(sw_and_version,cam_tag,kv_str,aperture_text,df_range,spot_text,frames_text,mag_wx,pixel_size, movie_format)
+  rtf_content= generate_rtf_table(
+      scope_title,
+      sw_and_version,
+      cam_text,
+      count_text,
+      kv_str,
+      aperture_text,
+      obj_aperture,
+      df_range,
+      spot_text,
+      frames_text,
+      mag_wx,
+      pixel_size,
+      movie_format,
+      tilt_range,
+      slit_text,
+      cam_exp_text
+    )
 
   # Write the RTF content to a file
   with open(options.output, "w") as file:
       file.write(rtf_content)
 
   if verbosity>=1:
-    print(f"\nDone! Wrote report to {options.output}")
-
-def loop_branch(parent, namespace_shared_str, prefix="   "):
-  for e_idx, ele in enumerate(parent):
-    cleaned_tag= ele.tag.replace(namespace_shared_str, "")
-    print(f"  {prefix} {e_idx} {cleaned_tag}")
+    print(f"\nDone! Report written to: {options.output}")
 
 def find_simple_tag(root, search_string, namespace_dict, pad=None, prefix=None):
+  """
+  Finds a simple XML tag containing a given search string under a branch in an XML tree
+
+  Parameters:
+    root : XML element tree
+    search_string : string to search for
+    namespace_dict : namespace under which to look for search string
+    pad : optional text between printed tag & value
+    prefix : optional leading text when printing to screen
+
+  Returns:
+      value
+  """
+
   dict_key= list( namespace_dict.keys() )[0]
   found_element= root.find(f'.//{dict_key}:{search_string}', namespace_dict)
   namespace_str= "{" + namespace_dict[dict_key] + "}"
@@ -274,9 +343,25 @@ def find_simple_tag(root, search_string, namespace_dict, pad=None, prefix=None):
     else:
       print(" ", cleaned_tag, pad, found_value)
 
-  return cleaned_tag, found_value
+  ###return cleaned_tag, found_value
+  return found_value
 
 def find_complex_tag(root, search_string, namespace_dict, parent_key='KeyValueOfstringanyType', pad=None):
+  """
+  Finds a complex XML tag which contains a parent key.
+  Key is of the form: './/{dict_key}:{parent_key}[a:Key="{search_string}"]/a:Key'
+
+  Parameters:
+    root : XML element tree
+    search_string : string to search for
+    namespace_dict : namespace under which to look for search string
+    parent_key : parent key, where key is of the form: './/{dict_key}:{parent_key}[a:Key="{search_string}"]/a:Key'
+    pad : optional text between printed tag & value
+
+  Returns:
+      value
+  """
+
   dict_key= list( namespace_dict.keys() )[0]
   key_string= f'.//{dict_key}:{parent_key}[a:Key="{search_string}"]/a:Key'
   search_element= root.find(f'.//{dict_key}:{parent_key}[a:Key="{search_string}"]/a:Key', namespace_dict)
@@ -294,11 +379,30 @@ def find_complex_tag(root, search_string, namespace_dict, parent_key='KeyValueOf
     if pad:
       print(" ", found_key, pad, found_value)
 
-    return found_key, found_value
+    ###return found_key, found_value
+    return found_value
   else:
-    return None, "N/A"
+    ###return None, "N/A"
+    return "N/A"
 
 def find_element(root, search_string, namespace_dict, prefix="   ", debug=False):
+  """
+  Finds an element containing a given search string under a branch in an XML tree
+
+  Parameters:
+    root : XML element tree
+    search_string : string to search for
+    namespace_dict : namespace under which to look for search string
+    prefix : optional leading text when printing to screen
+    debug : boolean for printing to screen
+
+  Functions called:
+    loop_branch
+
+  Returns:
+      XML element
+  """
+
   dict_key= list( namespace_dict.keys() )[0]
   found_element= root.find(f'.//{dict_key}:{search_string}', namespace_dict)
 
@@ -309,7 +413,36 @@ def find_element(root, search_string, namespace_dict, prefix="   ", debug=False)
 
   return found_element
 
+def loop_branch(parent, namespace_shared_str, prefix="   "):
+  """
+  Prints cleaned-up XML tag
+
+  Parameters:
+    parent : XML tree
+    namespace_shared_str : (string) namespace
+    prefix : leading text when printing to screen
+
+  """
+
+  for e_idx, ele in enumerate(parent):
+    cleaned_tag= ele.tag.replace(namespace_shared_str, "")
+    print(f"  {prefix} {e_idx} {cleaned_tag}")
+
 def check_frames(fn, debug=False):
+  """
+  Gets the number of frames in a micrograph movie
+
+  Parameters:
+    fn : filename
+    debug : optional boolean flag to print verbose information
+
+  Functions called:
+    check_exe
+
+  Returns:
+      number of frames
+  """
+
   path_header= check_exe('header')
 
   # Read header
@@ -356,113 +489,148 @@ def check_exe(search_exe, debug=False):
 
   return exe_path
 
-def generate_rtf_table(sw_and_version,cam_tag,kv_str,aperture_text,df_range,spot_text,num_frames,mag_wx,pixel_size, movie_format):
-  # Repeated data (that I understand)
-  row_format=r"\cell\row\trowd\trleft5\clpadt108\clcbpat18\cellx2976\clbrdrt\brdrs\brdrw10\brdrcf19\clbrdrl\brdrs\brdrw10\brdrcf19\clpadt108\clcbpat18\cellx4535\clbrdrt\brdrs\brdrw10\brdrcf19\clbrdrl\brdrs\brdrw10\brdrcf19\clpadt108\clcbpat18\cellx7655\clbrdrt\brdrs\brdrw10\brdrcf19\clbrdrl\brdrs\brdrw10\brdrcf19\clpadt108\clcbpat18\cellx9356\plain \rtlch"
-  empty_cell=r"\cell\plain \rtlch \rtlch \ltrch\fs22\kerning0\dbch"
+def generate_rtf_table(
+    scope_title,
+    sw_and_version,
+    cam_text,
+    count_text,
+    kv_str,
+    aperture_text,
+    obj_aperture,
+    df_range,
+    spot_text,
+    num_frames,
+    mag_wx,
+    pixel_size,
+    movie_format,
+    tilt_range,
+    slit_text,
+    cam_exp_text
+  ):
+  """
+  Generates RTF table
+
+  Parameters:
+    scope_title
+    sw_and_version
+    cam_text
+    count_text
+    kv_str
+    aperture_text
+    obj_aperture
+    df_range
+    spot_text
+    num_frames
+    mag_wx
+    pixel_size
+    movie_format
+    tilt_range
+    slit_text
+    cam_exp_text
+
+  Returns:
+    RTF text
+  """
+
+  # Repeated data
+  empty_cell=r"\cell \alang1081 \sa0\alang1025 \f5"
+  cell_format_1=r"\clbrdrt\brdrs\brdrw10\brdrcf1\clbrdrl\brdrs\brdrw10\brdrcf1\clpadt72\clbrdrb\brdrs\brdrw10\brdrcf1\clbrdrr\brdrs\brdrw10\brdrcf1"
+  cell_format_2=r"\cell\row\trowd\trleft10\ltrrow\trrh-432" + cell_format_1 + r"\clcbpat18\clvertalc"
+  cell_format_6=r"\cell\row\trowd\trleft10\ltrrow" + cell_format_1 + r"\cellx2422" + cell_format_1 + r"\cellx4431"
+  cell_format_3=r"}" + cell_format_6 + cell_format_1 + r"\cellx7563" + cell_format_1 + r"\cellx9183 \alang1081 \sa0{\alang1025 \lang2057\lang2057\b\f5" + "\n"
+  cell_format_4=r"}\cell \alang1081 \sa0{\alang1025 \f5" + "\n"
+  cell_format_5=r"}\cell \alang1081 \sa0{\alang1025 \lang2057\lang2057\b\f5" + "\n"
+  cell_format_7=r"}{\alang1025 \lang2057\lang2057\b\f5" + "\n"
 
   rtf_string = r"{\rtf1\ansi\deff4\adeflang1025" + "\n"
-  rtf_string+= r"{\fonttbl{\f4\fswiss\fprq0\fcharset128 Calibri;}{\f5\fswiss\fprq0\fcharset128 Calibri Light;}{\f6\fnil\fprq2\fcharset0 Calibri;}}" + "\n"
-  rtf_string+= r"{\colortbl;\red0\green0\blue0;\red0\green0\blue255;\red0\green255\blue255;\red0\green255\blue0;\red255\green0\blue255;\red255\green0\blue0;\red255\green255\blue0;\red255\green255\blue255;\red0\green0\blue128;\red0\green128\blue128;\red0\green128\blue0;\red128\green0\blue128;\red128\green0\blue0;\red128\green128\blue0;\red128\green128\blue128;\red192\green192\blue192;\red47\green84\blue150;\red242\green242\blue242;\red191\green191\blue191;}" + "\n"
-  rtf_string+= r"{\stylesheet{\snext0\rtlch \ltrch\lang1033\langfe2052\hich\af4\loch\widctlpar\hyphpar0\ltrpar\cf0\f4\fs24\lang1033\kerning1\dbch\af7\langfe2052 Normal;}}" + "\n"
-  rtf_string+= r"\deftab709\hyphauto1\viewscale100" + "\n"
-  rtf_string+= r"\paperh16838\paperw11906\margl1134\margr1134\margt1134\margb1134" + "\n"
-  rtf_string+= r"{\*\ftnsep\chftnsep}\pgndec\plain \rtlch \ltrch\lang1033\langfe2052\hich\af4\loch\widctlpar\hyphpar0\ltrpar\cf0\f4\fs24\lang1033\kerning1\dbch\af7\langfe2052\ql\ltrpar\loch" + "\n"
-  rtf_string+= r"\par\trleft5\clbrdrt\brdrs\brdrw10\brdrcf19\clbrdrl\brdrs\brdrw10\brdrcf19\clpadt108\cellx2976\clbrdrt\brdrs\brdrw10\brdrcf19\cellx9356" + "\n"
-  rtf_string+= r"\cf17\f5\dbch\sb240" + "\n"
-  rtf_string+= r"{\b\kerning0 Data acquisition parameters}" + "\n"
-  rtf_string+= r"\par \rtlch \sb0\ab \loch\fs22 \cell\plain" + "\n"
-  rtf_string+= r"\cell\row\trowd\trleft5\clbrdrt\brdrs\brdrw10\brdrcf19\clpadt108\clpadr108\clcbpat18\cellx2976\clbrdrt\brdrs\brdrw10\brdrcf19\clcbpat18\cellx4535\clbrdrt\brdrs\brdrw10\brdrcf19\clpadt108\clcbpat18\cellx7655\clbrdrt\brdrs\brdrw10\brdrcf19\clcbpat18\cellx9356" + "\n"
-  rtf_string+= r"{\fs22\i\b Hardware}" + "\n"
-  rtf_string+= r"\cell \ltrch\fs22 \cell" + "\n"
-  rtf_string+= r"{\fs22\i\b Software}" + "\n"
-  rtf_string+= r"\cell \rtlch \cell" + "\n"
-  rtf_string+= r"\row\trowd\trleft5\clpadt108\cellx2976\clpadt108\cellx4535\clpadt108\cellx7655\clbrdrt\brdrs\brdrw10\brdrcf19\clpadt108\cellx9356\plain" + "\n"
-  rtf_string+= r"{\fs22\b Microscope}\cell\plain" + "\n"
-  rtf_string+= column2_text("Titan Krios")
-  rtf_string+= bold_text("Data collection")
-  rtf_string+= column4_text(sw_and_version)
-  rtf_string+= row_format + "\n"
-  rtf_string+= bold_text("Detector (mode)")
-  rtf_string+= column2_text("Falcon4i")
-  rtf_string+= bold_text("Collection method")
-  rtf_string+= column4_text("AFIS")
-  rtf_string+= r"\cell\row\trowd\trleft5\clpadt108\cellx2976\clbrdrt\brdrs\brdrw10\brdrcf19\clbrdrl\brdrs\brdrw10\brdrcf19\clpadt108\cellx4535\clbrdrt\brdrs\brdrw10\brdrcf19\clbrdrl\brdrs\brdrw10\brdrcf19\clpadt108\cellx7655\clbrdrt\brdrs\brdrw10\brdrcf19\clbrdrl\brdrs\brdrw10\brdrcf19\clpadt108\cellx9356\plain \rtlch" + "\n"
-  rtf_string+= bold_text("Accelerating voltage")
-  rtf_string+= column2_text(kv_str)
-  rtf_string+= bold_text("Movie format")
-  rtf_string+= column4_text(movie_format)
-  rtf_string+= row_format + "\n"
-  rtf_string+= bold_text("Spherical aberration")
-  rtf_string+= column2_text("2.7")
-  rtf_string+= r"\rtlch \ltrch\fs22\kerning0\dbch" + "\n"
+  rtf_string+= r"{\fonttbl{\f0\froman\fprq2\fcharset0 Times New Roman;}{\f1\froman\fprq2\fcharset2 Symbol;}{\f2\fswiss\fprq2\fcharset0 Arial;}{\f3\froman\fprq2\fcharset0 Liberation Serif{\*\falt Times New Roman};}{\f4\fswiss\fprq0\fcharset128 Calibri;}{\f5\fswiss\fprq0\fcharset128 Calibri Light;}{\f6\fnil\fprq2\fcharset0 Calibri;}{\f7\fnil\fprq2\fcharset0 0;}}" + "\n"
+  rtf_string+= r"{\colortbl;\red0\green0\blue0;\red0\green0\blue255;\red0\green255\blue255;\red0\green255\blue0;\red255\green0\blue255;\red255\green0\blue0;\red255\green255\blue0;\red255\green255\blue255;\red0\green0\blue128;\red0\green128\blue128;\red0\green128\blue0;\red128\green0\blue128;\red128\green0\blue0;\red128\green128\blue0;\red128\green128\blue128;\red192\green192\blue192;\red203\green211\blue222;\red234\green237\blue241;}" + "\n"
+  rtf_string+= r"{\stylesheet{\alang1081 \f4 Normal;}}" + "\n"
+  rtf_string+= r"\hyphauto1\viewscale160" + "\n"
+  rtf_string+= r"\trowd\ltrrow" + cell_format_1 + r"\clcbpat17\clvertalc\cellx9183 \alang1081 \sa160{\alang1025 \b\f5" + "\n"
+  rtf_string+= r"Data acquisition parameters}" + cell_format_2 + r"\cellx4431" + cell_format_1 + r"\clcbpat18\clvertalc\cellx9183 \alang1081 \sa160{\alang1025 \i\b\f5" + "\n"
+  rtf_string+= r"Hardware}\cell \alang1081 \sa160{\alang1025 \i\b\f5" + "\n"
+  rtf_string+= "Software" + cell_format_3
+  rtf_string+= r"Microscope" + cell_format_4
+  rtf_string+= scope_title + cell_format_5
+  rtf_string+= r"Data collection" + cell_format_4
+  rtf_string+= sw_and_version + cell_format_3
+  rtf_string+= r"Detector (mode)}\cell \alang1081 \sa0{\alang1025 \lang2057\lang2057\f5" + "\n"
+  if count_text == "true" : cam_text+= " (counting)"
+  rtf_string+= cam_text + cell_format_5
+  rtf_string+= r"Collection method" + cell_format_4
+  rtf_string+= r"AFIS}" + cell_format_6 + r"\clbrdrt\brdrs\brdrw10\brdrcf1\clbrdrl\brdrs\brdrw10\brdrcf1\clpadt72\cellx7563\clbrdrt\brdrs\brdrw10\brdrcf1\clpadt72\cellx9183 \alang1081 \sa0{\alang1025 \lang2057\lang2057\b\f5" + "\n"
+  rtf_string+= r"Accelerating voltage" + cell_format_4
+  rtf_string+= kv_str + r"}\cell \alang1081 \sa0\alang1025 \f5" + "\n"
   rtf_string+= empty_cell + "\n"
-  rtf_string+= r"\cell\row\trowd\trleft5\clpadt108\cellx2976\clbrdrt\brdrs\brdrw10\brdrcf19\clbrdrl\brdrs\brdrw10\brdrcf19\clpadt108\cellx4535\clbrdrt\brdrs\brdrw10\brdrcf19\clbrdrl\brdrs\brdrw10\brdrcf19\clpadt108\cellx7655\clbrdrt\brdrs\brdrw10\brdrcf19\clbrdrl\brdrs\brdrw10\brdrcf19\clpadt108\cellx9356\plain \rtlch \rtlch\ab \ltrch\fs22\b\kerning0\dbch" + "\n"
+  rtf_string+= cell_format_6 + r"\clbrdrl\brdrs\brdrw10\brdrcf1\clpadt72\cellx7563\clpadt72\cellx9183 \alang1081 \sa0{\alang1025 \lang2057\lang2057\b\f5" + "\n"
+  rtf_string+= r"Spherical aberration" + cell_format_4
+  rtf_string+= r"2.7}\cell \alang1081 \sa0\alang1025 \f5" + "\n"
   rtf_string+= empty_cell + "\n"
-  rtf_string+= empty_cell + "\n"
-  rtf_string+= empty_cell + "\n"
-  rtf_string+= row_format + "\n"
-  rtf_string+= r"{\rtlch\ai\ab \ltrch\fs22\i\b\kerning0\dbch Data acquisition parameters}\cell\plain \rtlch" + "\n"
-  rtf_string+= r"\rtlch \ltrch\fs22\kerning0\dbch" + "\n"
-  rtf_string+= empty_cell + "\n"
-  rtf_string+= empty_cell + "\n"
-  rtf_string+= r"\cell\row\trowd\trleft5\clpadt108\cellx2976\clbrdrt\brdrs\brdrw10\brdrcf19\clbrdrl\brdrs\brdrw10\brdrcf19\clpadt108\cellx4535\clbrdrt\brdrs\brdrw10\brdrcf19\clbrdrl\brdrs\brdrw10\brdrcf19\clpadt108\cellx7655\clbrdrt\brdrs\brdrw10\brdrcf19\clbrdrl\brdrs\brdrw10\brdrcf19\clpadt108\cellx9356\plain \rtlch" + "\n"
-  rtf_string+= bold_text("Apertures (C1, C2, C3)")
-  rtf_string+= column2_text(aperture_text)
-  rtf_string+= bold_text(r"Defocus range (}{\rtlch\ab \ltrch\fs22\b\kerning0\dbch \u181\'3f}{\rtlch\ab \ltrch\fs22\b\kerning0\dbch m)")
-  rtf_string+= column4_text(df_range)
-  rtf_string+= row_format + "\n"
-  rtf_string+= bold_text("Objective aperture")
-  rtf_string+= column2_text("-")
-  rtf_string+= bold_text("Dose (e/px/sec)")
-  rtf_string+= column4_text("9.09")
-  rtf_string+= r"\cell\row\trowd\trleft5\clpadt108\cellx2976\clbrdrt\brdrs\brdrw10\brdrcf19\clbrdrl\brdrs\brdrw10\brdrcf19\clpadt108\cellx4535\clbrdrt\brdrs\brdrw10\brdrcf19\clbrdrl\brdrs\brdrw10\brdrcf19\clpadt108\cellx7655\clbrdrt\brdrs\brdrw10\brdrcf19\clbrdrl\brdrs\brdrw10\brdrcf19\clpadt108\cellx9356\plain \rtlch" + "\n"
-  rtf_string+= bold_text("Energy filter slit (eV)")
-  rtf_string+= column2_text("10")
-  rtf_string+= bold_text(r"Dose (e/\u197\'3f}{\rtlch\ab \ltrch\super\fs22\b\kerning0\dbch 2}{\rtlch\ab \ltrch\fs22\b\kerning0\dbch /sec)")
-  rtf_string+= column4_text("18.33")
-  rtf_string+= row_format + "\n"
-  rtf_string+= bold_text(r"Illuminated area (}{\rtlch\ab \ltrch\fs22\b\kerning0\dbch \u181\'3f}{\rtlch\ab \ltrch\fs22\b\kerning0\dbch m)")
-  rtf_string+= column2_text("0.70")
-  rtf_string+= bold_text("Exposure time (sec)")
-  rtf_string+= column4_text("2.72")
-  rtf_string+= r"\cell\row\trowd\trleft5\clpadt108\cellx2976\clbrdrt\brdrs\brdrw10\brdrcf19\clbrdrl\brdrs\brdrw10\brdrcf19\clpadt108\cellx4535\clbrdrt\brdrs\brdrw10\brdrcf19\clbrdrl\brdrs\brdrw10\brdrcf19\clpadt108\cellx7655\clbrdrt\brdrs\brdrw10\brdrcf19\clbrdrl\brdrs\brdrw10\brdrcf19\clpadt108\cellx9356\plain \rtlch" + "\n"
-  rtf_string+= bold_text("Spot size")
-  rtf_string+= column2_text("5")
-  rtf_string+= bold_text(r"Total dose (e/\u197\'3f}{\rtlch\ab \ltrch\super\fs22\b\kerning0\dbch 2}{\rtlch\ab \ltrch\fs22\b\kerning0\dbch )")
-  rtf_string+= column4_text("50")
-  rtf_string+= row_format + "\n"
-  rtf_string+= bold_text(r"Tilt angle (}{\rtlch\ab \ltrch\fs22\b\kerning0\dbch \uc2 \u176\'81\'8b)\uc1 ")
-  rtf_string+= column2_text("0")
-  rtf_string+= bold_text("Total frames (#)")
-  rtf_string+= column4_text(num_frames)
-  rtf_string+= r"\cell\row\trowd\trleft5\clpadt108\cellx2976\clbrdrt\brdrs\brdrw10\brdrcf19\clbrdrl\brdrs\brdrw10\brdrcf19\clpadt108\cellx4535\clbrdrt\brdrs\brdrw10\brdrcf19\clbrdrl\brdrs\brdrw10\brdrcf19\clpadt108\cellx7655\clbrdrt\brdrs\brdrw10\brdrcf19\clbrdrl\brdrs\brdrw10\brdrcf19\clpadt108\cellx9356\plain \rtlch" + "\n"
-  rtf_string+= bold_text("Nominal magnification")
-  rtf_string+= column2_text(mag_wx)
-  rtf_string+= r"\rtlch\ab \ltrch\fs22\b\kerning0\dbch" + "\n"
-  rtf_string+= empty_cell + "\n"
-  rtf_string+= row_format + "\n"
-  rtf_string+= bold_text(r"Pixel size (\u197\'3f}{\rtlch\ab \ltrch\fs22\b\kerning0\dbch)")
-  rtf_string+= column2_text(pixel_size)
-  rtf_string+= r"\rtlch \ltrch\fs22\kerning0\dbch" + "\n"
-  rtf_string+= empty_cell + "\n"
-  rtf_string+= r"\cell\row\trowd\trleft5\clpadt108\cellx2976\clbrdrt\brdrs\brdrw10\brdrcf19\clbrdrl\brdrs\brdrw10\brdrcf19\clpadt108\cellx4535\clbrdrt\brdrs\brdrw10\brdrcf19\clbrdrl\brdrs\brdrw10\brdrcf19\clpadt108\cellx7655\clbrdrt\brdrs\brdrw10\brdrcf19\clbrdrl\brdrs\brdrw10\brdrcf19\clpadt108\cellx9356\plain \rtlch \rtlch\ab \ltrch\fs22\b\kerning0\dbch" + "\n"
-  rtf_string+= empty_cell + "\n"
-  rtf_string+= empty_cell + "\n"
-  rtf_string+= empty_cell + "\n"
-  rtf_string+= r"\cell\row\plain \rtlch \ltrch\lang1033\langfe2052\hich\af4\loch\widctlpar\hyphpar0\ltrpar\cf0\f4\fs24\lang1033\kerning1\dbch\af7\langfe2052\ql\ltrpar\loch" + "\n"
-  rtf_string+= r"\par }" + "\n"
+  rtf_string+= cell_format_2 + r"\cellx9183 \alang1081 \sa0{\alang1025 \i\b\f5" + "\n"
+  rtf_string+= "Data acquisition parameters" + cell_format_3
+  rtf_string+= r"Apertures (C1, C2, C3)" + cell_format_4
+  rtf_string+= aperture_text + cell_format_5
+  rtf_string+= r"Defocus range (\u181\'3fm, step size)" + cell_format_4
+  rtf_string+= r"}{\alang1025 \f5" + "\n"
+  rtf_string+= df_range + r"}" + cell_format_6 + r"" + cell_format_1 + r"\cellx7563" + cell_format_1 + r"\cellx9183 \alang1081 \sa0{\alang1025 \lang2057\lang2057\b\f5" + "\n"
+  rtf_string+= r"Objective aperture" + cell_format_4
+  if obj_aperture == "None":
+    rtf_string+= r"-" + cell_format_5
+  else:
+    rtf_string+= obj_aperture + cell_format_5
+  rtf_string+= r"Dose (e/px/sec)" + cell_format_4
+  rtf_string+= r"DOSE/SEC}" + cell_format_6 + r"" + cell_format_1 + r"\cellx7563" + cell_format_1 + r"\cellx9183 \alang1081 \sa0{\alang1025 \lang2057\lang2057\b\f5" + "\n"
+  rtf_string+= r"Energy filter slit (eV)" + cell_format_4
+  rtf_string+= slit_text + cell_format_5
+  rtf_string+= r"Dose (e/\u197\'3f}{\alang1025 \lang2057\super\lang2057\b\f5" + "\n"
+  rtf_string+= r"2" + cell_format_7
+  rtf_string+= r"/sec)" + cell_format_4
+  rtf_string+= r"DOSE/A2}" + cell_format_6 + r"" + cell_format_1 + r"\cellx7563" + cell_format_1 + r"\cellx9183 \alang1081 \sa0{\alang1025 \lang2057\lang2057\b\f5" + "\n"
+  rtf_string+= r"Illuminated area (\u181\'3fm)" + cell_format_4
+  rtf_string+= r"ILL_AREA" + cell_format_5
+  rtf_string+= r"Exposure time (sec)" + cell_format_4
+  rtf_string+= cam_exp_text + cell_format_3
+  rtf_string+= r"Spot size" + cell_format_4
+  rtf_string+= spot_text + cell_format_5
+  rtf_string+= r"Total dose (e/\u197\'3f}{\alang1025 \lang2057\super\lang2057\b\f5" + "\n"
+  rtf_string+= r"2}{\alang1025 \lang2057\lang2057\b\f5" + "\n"
+  rtf_string+= r")" + cell_format_4
+  rtf_string+= r"TOTAL_DOSE" + cell_format_3
+  rtf_string+= r"Tilt angle (\uc2 \u176\'81\'8b)\uc1 " + cell_format_4
+  rtf_string+= tilt_range + cell_format_5
+  rtf_string+= r"Frames (#)" + cell_format_4
+
+  if movie_format=='eer':
+    rtf_string+= num_frames + r"}" + cell_format_6 + r"" + cell_format_1 + r"\cellx7563" + cell_format_1 + r"\cellx9183 \alang1081 \sa0{\alang1025 \lang2057\lang2057\b\f5" + "\n"
+  else:
+    rtf_string+= r"FRAMES}" + cell_format_6 + r"" + cell_format_1 + r"\cellx7563" + cell_format_1 + r"\cellx9183 \alang1081 \sa0{\alang1025 \lang2057\lang2057\b\f5" + "\n"
+
+  rtf_string+= r"Nominal magnification}\cell\pard\plain \rtlch\ltrch\hich\intbl\sa0{\rtlch\alang1025 \ltrch\hich\af5\f5" + "\n"
+  rtf_string+= mag_wx + cell_format_5
+  rtf_string+= r"Fractions (#)" + cell_format_4
+  rtf_string+= num_frames + r"}" + cell_format_6 + cell_format_1 + r"\cellx7563" + cell_format_1 + r"\cellx9183 \alang1081 \sa0{\alang1025 \lang2057\lang2057\b\f5" + "\n"
+  rtf_string+= r"Pixel size (\u197\'3f}{\alang1025 \lang2057\super\lang2057\b\f5" + "\n"
+  rtf_string+= r"2" + cell_format_7
+  rtf_string+= r")" + cell_format_4
+  rtf_string+= pixel_size + cell_format_5
+  rtf_string+= r"Movie format" + cell_format_4
+
+  if movie_format:
+    rtf_string+= movie_format + r"}\cell\row \alang1081" + "\n"
+  else:
+    rtf_string+= r"MOVIE_FMT}\cell\row \alang1081" + "\n"
+
+  rtf_string+= "\n" + r"\par  \alang1081" + "\n"
+  rtf_string+= r"\par }"
 
   return rtf_string
 
-def column2_text(string):
-  return r"{\rtlch \ltrch\fs22\kerning0\dbch " + string + r"}\cell\plain \rtlch" + "\n"
+#def column2_text(string):
+  #return r"{\rtlch \ltrch\fs22\kerning0\dbch " + string + r"}\cell\plain \rtlch" + "\n"
 
-def column4_text(string):
-  return r"{\rtlch \ltrch\fs22\kerning0\dbch " + string + r"}" + "\n"
-
-def bold_text(string):
-  return r"{\rtlch\ab \ltrch\fs22\b\kerning0\dbch " + string + r"}\cell\plain \rtlch" + "\n"
+#def column4_text(string):
+  #return r"{\rtlch \ltrch\fs22\kerning0\dbch " + string + r"}" + "\n"
 
 def parse_command_line():
     """
