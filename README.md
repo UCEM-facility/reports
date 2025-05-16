@@ -9,7 +9,7 @@ This script parses XML files from ThermoFisher's EPU, extracts various parameter
 
 By default, the script looks in the directory `Images-Disc1` for XML files, but this default can be overridden. See below for command-line options.
 
-![tfs_xml2rtf_output](https://github.com/user-attachments/assets/918c9e3f-a3bc-45fd-8e3c-05ac885e63a1)
+![report_auto](https://github.com/user-attachments/assets/366816e5-2690-41ac-8370-bb97f911f467)
 
 # Parameters
 
