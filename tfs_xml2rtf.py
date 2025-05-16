@@ -9,6 +9,16 @@ import glob
 import inspect
 import tqdm
 import math
+can_import_xls=False
+try:
+  import pandas as pd
+  try:
+    import xlrd
+    can_import_xls=True
+  except ModuleNotFoundError:
+    print("WARNING! Can't find 'xlrd' module. Continuing...")
+except ModuleNotFoundError:
+  print("WARNING! Can't find 'pandas' module. Continuing...")
 
 USAGE="""
 Navigates directory tree and extracts selected information from EPU XML file series.
@@ -18,47 +28,8 @@ USAGE:
 
 """ % ((__file__,)*1)
 
-MODIFIED="Modified 2025 May 07"
+MODIFIED="Modified 2025 May 16"
 MAX_VERBOSITY=4
-
-def printvars(variables, quitTF=False, typeTF=False):
-    """Print the local variables in the caller's frame.
-
-    Adapted from https://stackoverflow.com/questions/6618795/get-locals-from-calling-namespace-in-python
-    """
-
-    if type(variables) is list:
-        # Weird things happen if
-        assert isinstance(variables[0], str), "UH OH!! Passed non-string %s instead of variable name" % variables[0]
-
-        variable_list= variables
-    elif isinstance(variables, str):
-        variable_list= [variables]
-    else:
-        print("ERROR!! Don't know how to deal with type %s" % type(variables) )
-        exit()
-
-    frame = inspect.currentframe()
-    dictionary= frame.f_back.f_locals
-
-    print("")
-    for variable in variable_list :
-        try:
-          msg= "%s: '%s'" % (variable, dictionary[variable])
-        except KeyError as e:
-          print(f"Can't find key '{variable}'")
-          print(f"dictionary: '{dictionary.keys()}'")
-          print("Exiting...")
-          exit()
-
-        if typeTF: msg+= " %s" % type(dictionary[variable])
-        print(msg)
-
-    del frame
-
-    if quitTF:
-        print('\nExiting printvars...')  # reminder in case I forget to take out the quit flag
-        exit()
 
 def main(options):
   verbosity= options.verbosity
@@ -70,6 +41,7 @@ def main(options):
     print()
     print(f"{os.path.basename(__file__)}, {MODIFIED}")
     print(f"  Top-level directory: {options.directory}")
+    print(f"  Calibration file: {options.calibration}")
     print(f"  Output filename: {options.output}")
     print(f"  Skip movie scan? {options.no_scan}")
     print(f"  Show progress bar? {options.progress}")
@@ -198,26 +170,34 @@ def main(options):
     if -min_df < -df_microns : min_df=df_microns
     if -max_df > -df_microns : max_df=df_microns
 
-    # Detectors[EF-Falcon].TotalDose (UNITS?)
-    f4_dose_text= find_complex_tag(root, "Detectors[EF-Falcon].TotalDose", namespace_array_dict, parent_key='KeyValueOfstringanyType', pad='\t' if verbosity>=4 else '')
+    ### Detectors[EF-Falcon].TotalDose (UNITS?)
+    ##f4_dose_text= find_complex_tag(root, "Detectors[EF-Falcon].TotalDose", namespace_array_dict, parent_key='KeyValueOfstringanyType', pad='\t' if verbosity>=4 else '')
 
     # Dose (UNITS?)
     custom_dose_text= find_complex_tag(root, "Dose", namespace_array_dict, parent_key='KeyValueOfstringanyType', pad='\t\t\t\t\t' if verbosity>=4 else '')
 
     # EnergySelectionSlitWidth
     slit_text= find_simple_tag(root, "EnergySelectionSlitWidth", namespace_shared_dict, pad='\t\t' if verbosity>=4 else '')
+    #printvars('slit_text',True,True)
 
     # Detectors[EF-Falcon].ExposureTime
     custom_element= find_element(root, "CustomData", namespace_shared_dict)
-    f4_exp_text= find_complex_tag(custom_element, "Detectors[EF-Falcon].ExposureTime", namespace_array_dict, parent_key='KeyValueOfstringanyType', pad='\t' if verbosity>=4 else '')
+
+    # Tag is different on Krios and Glacios
+    if scope_title == "Krios":
+      detector_tag="Detectors[EF-Falcon].ExposureTime"
+    else:
+      detector_tag="Detectors[BM-Falcon].ExposureTime"
+
+    detector_text= find_complex_tag(custom_element, detector_tag, namespace_array_dict, parent_key='KeyValueOfstringanyType', pad='\t' if verbosity>=4 else '')
 
     # microscopeData -> acquisition -> camera -> ExposureTime
     camera_element= find_element(root, "camera", namespace_shared_dict)
     cam_exp_text= find_simple_tag(camera_element, "ExposureTime", namespace_shared_dict, pad='\t\t\t\t' if verbosity>=4 else '')
 
-    # Sanity check: Make sure the two exposure times are equal to 2 decimal places
-    assert round( float(f4_exp_text), 2) == round(float(cam_exp_text), 2), f"UH OH!! Exposure time in 'Detectors[EF-Falcon].ExposureTime' ({f4_exp_text}) doesn't equal 'microscopeData -> acquisition -> camera -> ExposureTime' ({cam_exp_text})!"
-    #printvars(['f4_exp_text','cam_exp_text'], True)
+    # Sanity check: Make sure the two exposure times are equal to 1 decimal place
+    ###printvars(['detector_text','cam_exp_text'], True)
+    assert round( float(detector_text), 1) == round(float(cam_exp_text), 1), f"UH OH!! Exposure time in 'Detectors[EF-Falcon].ExposureTime' ({detector_text}) doesn't equal 'microscopeData -> acquisition -> camera -> ExposureTime' ({cam_exp_text})!"
 
     # Detectors[EF-Falcon].FrameRate
     frames_text= find_complex_tag(root, "Detectors[EF-Falcon].FrameRate", namespace_array_dict, parent_key='KeyValueOfstringanyType', pad='\t' if verbosity>=4 else '')
@@ -277,17 +257,26 @@ def main(options):
   # Process text
   sw_and_version= f"{sw_text} v {'.'.join(version_text.split('.', 3)[:3])}"
   kv_str= f"{int(float(volt_text)/1000)} keV"
-  aperture_text= f"{c1_text}, {c2_text}, {c3_text}"
-  df_range= f"{max_df:.1f} to  {min_df:.1f}"
+  df_range= f"{max_df:.1f} to {min_df:.1f}"
   frames_text= str(num_frames)
   mag_wx= f"{mag_text[:3]} {mag_text[3:]} x"
-  pixel_size= f"{float(apix_x_text)*1e10:.3f}"
-  if min_tilt != max_tilt:
-    tilt_range= f"{min_tilt:.1f} to {max_tilt:.1f}"
-  else:
-    tilt_range= f"{tilt_degrees:.1f}"
+  pixel_size= get_calibration(mag_text, apix_x_text, options.calibration, can_import_xls)
   cam_exp_text= f"{float(cam_exp_text):.2f}"
-  #printvars('tilt_range',True)
+
+  # Don't show C3 for Glacios
+  if scope_title == "Krios":
+    aperture_text= f"{c1_text}, {c2_text}, {c3_text}"
+  elif scope_title == "Glacios" :
+    aperture_text= f"200, {c2_text}"
+  else:
+    if verbosity>=1: print(f"Don't know microscope: {scope_title}")
+    aperture_text= f"{c1_text}, {c2_text}, {c3_text}"
+
+  # Tilt range
+  if min_tilt != max_tilt:
+    tilt_range= f"{check_negative_zero(min_tilt):.1f} to {check_negative_zero(max_tilt):.1f}"
+  else:
+    tilt_range= f"{check_negative_zero(tilt_degrees):.1f}"
 
   # Build RTF
   rtf_content= generate_rtf_table(
@@ -334,8 +323,12 @@ def find_simple_tag(root, search_string, namespace_dict, pad=None, prefix=None):
   dict_key= list( namespace_dict.keys() )[0]
   found_element= root.find(f'.//{dict_key}:{search_string}', namespace_dict)
   namespace_str= "{" + namespace_dict[dict_key] + "}"
-  cleaned_tag= found_element.tag.replace(namespace_str, '')
-  found_value= found_element.text
+  if found_element is not None:
+    cleaned_tag= found_element.tag.replace(namespace_str, '')
+    found_value= found_element.text
+  else:
+    cleaned_tag= search_string
+    found_value= 'N/A'
 
   if pad:
     if prefix:
@@ -343,7 +336,6 @@ def find_simple_tag(root, search_string, namespace_dict, pad=None, prefix=None):
     else:
       print(" ", cleaned_tag, pad, found_value)
 
-  ###return cleaned_tag, found_value
   return found_value
 
 def find_complex_tag(root, search_string, namespace_dict, parent_key='KeyValueOfstringanyType', pad=None):
@@ -379,10 +371,8 @@ def find_complex_tag(root, search_string, namespace_dict, parent_key='KeyValueOf
     if pad:
       print(" ", found_key, pad, found_value)
 
-    ###return found_key, found_value
     return found_value
   else:
-    ###return None, "N/A"
     return "N/A"
 
 def find_element(root, search_string, namespace_dict, prefix="   ", debug=False):
@@ -489,6 +479,69 @@ def check_exe(search_exe, debug=False):
 
   return exe_path
 
+def get_calibration(mag_text, pxsz_text, excel_file, can_import_xls):
+  """
+  Get calibrated pixel size from Excel spreadsheet.
+
+  Library dependencies:
+    pandas
+    xlrd
+
+  Parameters:
+    mag_text (str)
+    pxsz_text
+    excel_file
+    can_import_xls
+
+  Returns:
+    formatted pixel size (string)
+  """
+
+  if excel_file and can_import_xls:
+    if not os.path.exists(excel_file):
+      print(f"\nWARNING! Couldn't find magnification-calibration spreadsheet {os.path.basename(excel_file)}, continuing...")
+    else:
+      # Spreadsheet keys have a space between the 3rd and 4th digit, and no space before the trailing 'x'
+      data_frame= pd.read_excel(excel_file)
+
+      # Assuming first column is magnification
+      col1= data_frame.keys()[0]
+      known_mag_key= 'Nominal magnification'
+      if col1 != known_mag_key:
+        print(f"\nWARNING! First column in spreadsheet is '{col1}' not '{known_mag_key}', continuing...")
+
+      # Assuming second column is pixel size
+      col2= data_frame.keys()[1]
+      known_px_key= 'Falcon4i (Å)'
+      if col2 != known_px_key:
+        print(f"\nWARNING! Second column in spreadsheet is '{col2}' not '{known_px_key}', continuing...")
+
+      mag_split= f"{mag_text[:3]} {mag_text[3:]}x"
+      try:
+        pxsz_calib= data_frame[data_frame[col1].str.contains(mag_split)][col2].iloc[0]
+        pxsz_clean= f"{float(pxsz_text)*1e10:.3f} (calib)"
+        ###printvars(['excel_file','mag_text','can_import_xls','pxsz_calib','pxsz_clean'], True, True)
+      except IndexError:
+        print(f"\nWARNING! Couldn't find magnification '{mag_split}' in '{os.path.basename(excel_file)}', continuing...")
+        can_import_xls= False
+    # End spreadsheet-exists IF-THEN
+  # End can-import IF-THEN
+
+  # In case of failure, revert to uncalibrated pixel size
+  if not can_import_xls or not excel_file: pxsz_clean= f"{float(pxsz_text)*1e10:.3f} (uncalib)"
+
+  return pxsz_clean
+
+def check_negative_zero(angle_float):
+  # An angle of "-0.0" looks funny
+
+  if angle_float == -0.0:
+    cleaned_text= float("0.0")
+  else:
+    cleaned_text= angle_float
+
+  return cleaned_text
+
 def generate_rtf_table(
     scope_title,
     sw_and_version,
@@ -541,6 +594,7 @@ def generate_rtf_table(
   cell_format_4=r"}\cell \alang1081 \sa0{\alang1025 \f5" + "\n"
   cell_format_5=r"}\cell \alang1081 \sa0{\alang1025 \lang2057\lang2057\b\f5" + "\n"
   cell_format_7=r"}{\alang1025 \lang2057\lang2057\b\f5" + "\n"
+  cell_format_8=r"}\cell \alang1081 \sa0{\alang1025 \lang2057\lang2057\f5" + "\n"
 
   rtf_string = r"{\rtf1\ansi\deff4\adeflang1025" + "\n"
   rtf_string+= r"{\fonttbl{\f0\froman\fprq2\fcharset0 Times New Roman;}{\f1\froman\fprq2\fcharset2 Symbol;}{\f2\fswiss\fprq2\fcharset0 Arial;}{\f3\froman\fprq2\fcharset0 Liberation Serif{\*\falt Times New Roman};}{\f4\fswiss\fprq0\fcharset128 Calibri;}{\f5\fswiss\fprq0\fcharset128 Calibri Light;}{\f6\fnil\fprq2\fcharset0 Calibri;}{\f7\fnil\fprq2\fcharset0 0;}}" + "\n"
@@ -555,12 +609,12 @@ def generate_rtf_table(
   rtf_string+= scope_title + cell_format_5
   rtf_string+= r"Data collection" + cell_format_4
   rtf_string+= sw_and_version + cell_format_3
-  rtf_string+= r"Detector (mode)}\cell \alang1081 \sa0{\alang1025 \lang2057\lang2057\f5" + "\n"
+  rtf_string+= r"Detector (mode)" + cell_format_8
   if count_text == "true" : cam_text+= " (counting)"
   rtf_string+= cam_text + cell_format_5
   rtf_string+= r"Collection method" + cell_format_4
   rtf_string+= r"AFIS}" + cell_format_6 + r"\clbrdrt\brdrs\brdrw10\brdrcf1\clbrdrl\brdrs\brdrw10\brdrcf1\clpadt72\cellx7563\clbrdrt\brdrs\brdrw10\brdrcf1\clpadt72\cellx9183 \alang1081 \sa0{\alang1025 \lang2057\lang2057\b\f5" + "\n"
-  rtf_string+= r"Accelerating voltage" + cell_format_4
+  rtf_string+= r"Accelerating voltage" + cell_format_8
   rtf_string+= kv_str + r"}\cell \alang1081 \sa0\alang1025 \f5" + "\n"
   rtf_string+= empty_cell + "\n"
   rtf_string+= cell_format_6 + r"\clbrdrl\brdrs\brdrw10\brdrcf1\clpadt72\cellx7563\clpadt72\cellx9183 \alang1081 \sa0{\alang1025 \lang2057\lang2057\b\f5" + "\n"
@@ -569,10 +623,15 @@ def generate_rtf_table(
   rtf_string+= empty_cell + "\n"
   rtf_string+= cell_format_2 + r"\cellx9183 \alang1081 \sa0{\alang1025 \i\b\f5" + "\n"
   rtf_string+= "Data acquisition parameters" + cell_format_3
-  rtf_string+= r"Apertures (C1, C2, C3)" + cell_format_4
+
+  if scope_title == "Krios":
+    rtf_string+= r"Apertures (C1, C2, C3)" + cell_format_4
+  else:
+    rtf_string+= r"Apertures (C1, C2)" + cell_format_4
+
   rtf_string+= aperture_text + cell_format_5
-  rtf_string+= r"Defocus range (\u181\'3fm, step size)" + cell_format_4
-  rtf_string+= r"}{\alang1025 \f5" + "\n"
+  rtf_string+= r"Defocus range (\u181\'3fm, step size)" + cell_format_8
+  ###rtf_string+= r"}{\alang1025 \f5" + "\n"
   rtf_string+= df_range + r"}" + cell_format_6 + r"" + cell_format_1 + r"\cellx7563" + cell_format_1 + r"\cellx9183 \alang1081 \sa0{\alang1025 \lang2057\lang2057\b\f5" + "\n"
   rtf_string+= r"Objective aperture" + cell_format_4
   if obj_aperture == "None":
@@ -588,7 +647,12 @@ def generate_rtf_table(
   rtf_string+= r"/sec)" + cell_format_4
   rtf_string+= r"DOSE/A2}" + cell_format_6 + r"" + cell_format_1 + r"\cellx7563" + cell_format_1 + r"\cellx9183 \alang1081 \sa0{\alang1025 \lang2057\lang2057\b\f5" + "\n"
   rtf_string+= r"Illuminated area (\u181\'3fm)" + cell_format_4
-  rtf_string+= r"ILL_AREA" + cell_format_5
+
+  if scope_title == "Glacios" :
+    rtf_string+= r"2.0" + cell_format_5
+  else:
+    rtf_string+= r"ILL_AREA" + cell_format_5
+
   rtf_string+= r"Exposure time (sec)" + cell_format_4
   rtf_string+= cam_exp_text + cell_format_3
   rtf_string+= r"Spot size" + cell_format_4
@@ -606,13 +670,15 @@ def generate_rtf_table(
   else:
     rtf_string+= r"FRAMES}" + cell_format_6 + r"" + cell_format_1 + r"\cellx7563" + cell_format_1 + r"\cellx9183 \alang1081 \sa0{\alang1025 \lang2057\lang2057\b\f5" + "\n"
 
-  rtf_string+= r"Nominal magnification}\cell\pard\plain \rtlch\ltrch\hich\intbl\sa0{\rtlch\alang1025 \ltrch\hich\af5\f5" + "\n"
+  ###rtf_string+= r"Nominal magnification}\cell\pard\plain \rtlch\ltrch\hich\intbl\sa0{\rtlch\alang1025 \ltrch\hich\af5\f5" + "\n"
+  ##rtf_string+= r"Nominal magnification}\cell \alang1081 \sa0{\alang1025 \f5" + "\n"
+  rtf_string+= r"Nominal magnification" + cell_format_8
   rtf_string+= mag_wx + cell_format_5
   rtf_string+= r"Fractions (#)" + cell_format_4
   rtf_string+= num_frames + r"}" + cell_format_6 + cell_format_1 + r"\cellx7563" + cell_format_1 + r"\cellx9183 \alang1081 \sa0{\alang1025 \lang2057\lang2057\b\f5" + "\n"
   rtf_string+= r"Pixel size (\u197\'3f}{\alang1025 \lang2057\super\lang2057\b\f5" + "\n"
   rtf_string+= r"2" + cell_format_7
-  rtf_string+= r")" + cell_format_4
+  rtf_string+= r")" + cell_format_8
   rtf_string+= pixel_size + cell_format_5
   rtf_string+= r"Movie format" + cell_format_4
 
@@ -626,11 +692,44 @@ def generate_rtf_table(
 
   return rtf_string
 
-#def column2_text(string):
-  #return r"{\rtlch \ltrch\fs22\kerning0\dbch " + string + r"}\cell\plain \rtlch" + "\n"
+def printvars(variables, quitTF=False, typeTF=False):
+    """Print the local variables in the caller's frame.
 
-#def column4_text(string):
-  #return r"{\rtlch \ltrch\fs22\kerning0\dbch " + string + r"}" + "\n"
+    Adapted from https://stackoverflow.com/questions/6618795/get-locals-from-calling-namespace-in-python
+    """
+
+    if type(variables) is list:
+        # Weird things happen if
+        assert isinstance(variables[0], str), "UH OH!! Passed non-string %s instead of variable name" % variables[0]
+
+        variable_list= variables
+    elif isinstance(variables, str):
+        variable_list= [variables]
+    else:
+        print("ERROR!! Don't know how to deal with type %s" % type(variables) )
+        exit()
+
+    frame = inspect.currentframe()
+    dictionary= frame.f_back.f_locals
+
+    print("")
+    for variable in variable_list :
+        try:
+          msg= "%s: '%s'" % (variable, dictionary[variable])
+        except KeyError as e:
+          print(f"Can't find key '{variable}'")
+          print(f"dictionary: '{dictionary.keys()}'")
+          print("Exiting...")
+          exit()
+
+        if typeTF: msg+= " %s" % type(dictionary[variable])
+        print(msg)
+
+    del frame
+
+    if quitTF:
+        print('\nExiting printvars...')  # reminder in case I forget to take out the quit flag
+        exit()
 
 def parse_command_line():
     """
@@ -656,6 +755,12 @@ def parse_command_line():
         help="Top-level images directory")
 
     parser.add_argument(
+        "--calibration", "-c",
+        type=str,
+        help="Magnification-calibration Excel spreadsheet")
+        #default=f'{os.environ["HOME"]}/Work/Umea/Reports/Glacios_calibrated_pixel_size.xls',
+
+    parser.add_argument(
         "--output", "-o",
         type=str,
         default='report.rtf',
@@ -676,11 +781,11 @@ def parse_command_line():
         type=int,
         default=1,
         help=f"Verbosity level [0..{MAX_VERBOSITY}]")
-    # Verbosity levels:
-    #   1: overall summary, progress bar
-    #   2: directory summary
-    #   3: list XML
-    #   4: print tags
+        # Verbosity levels:
+        #   1: overall summary, progress bar
+        #   2: directory summary
+        #   3: list XML
+        #   4: print tags
 
     parser.add_argument(
         "--debug",
