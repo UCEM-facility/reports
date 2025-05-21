@@ -497,9 +497,12 @@ def get_calibration(mag_text, pxsz_text, excel_file, can_import_xls):
     formatted pixel size (string)
   """
 
+  if excel_file and not can_import_xls:
+    print(f"\nWARNING! Couldn't read magnification-calibration spreadsheet '{os.path.basename(excel_file)}', continuing...")
+    print("  Please check libraries. Continuing...")
   if excel_file and can_import_xls:
     if not os.path.exists(excel_file):
-      print(f"\nWARNING! Couldn't find magnification-calibration spreadsheet {os.path.basename(excel_file)}, continuing...")
+      print(f"\nWARNING! Couldn't find magnification-calibration spreadsheet '{os.path.basename(excel_file)}', continuing...")
     else:
       # Spreadsheet keys have a space between the 3rd and 4th digit, and no space before the trailing 'x'
       data_frame= pd.read_excel(excel_file)
