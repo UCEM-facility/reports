@@ -28,7 +28,7 @@ USAGE:
 
 """ % ((__file__,)*1)
 
-MODIFIED="Modified 2025 May 16"
+MODIFIED="Modified 2025 May 21"
 MAX_VERBOSITY=4
 
 def main(options):
@@ -263,14 +263,14 @@ def main(options):
   pixel_size= get_calibration(mag_text, apix_x_text, options.calibration, can_import_xls)
   cam_exp_text= f"{float(cam_exp_text):.2f}"
 
-  # Don't show C3 for Glacios
-  if scope_title == "Krios":
-    aperture_text= f"{c1_text}, {c2_text}, {c3_text}"
-  elif scope_title == "Glacios" :
-    aperture_text= f"200, {c2_text}"
-  else:
-    if verbosity>=1: print(f"Don't know microscope: {scope_title}")
-    aperture_text= f"{c1_text}, {c2_text}, {c3_text}"
+  ## Don't show C3 for Glacios
+  #if scope_title == "Krios":
+    #aperture_text= f"{c1_text}, {c2_text}, {c3_text}"
+  #elif scope_title == "Glacios" :
+    #aperture_text= f"200, {c2_text}"
+  #else:
+    #if verbosity>=1: print(f"Don't know microscope: {scope_title}")
+    #aperture_text= f"{c1_text}, {c2_text}, {c3_text}"
 
   # Tilt range
   if min_tilt != max_tilt:
@@ -285,7 +285,7 @@ def main(options):
       cam_text,
       count_text,
       kv_str,
-      aperture_text,
+      c2_text,
       obj_aperture,
       df_range,
       spot_text,
@@ -624,10 +624,11 @@ def generate_rtf_table(
   rtf_string+= cell_format_2 + r"\cellx9183 \alang1081 \sa0{\alang1025 \i\b\f5" + "\n"
   rtf_string+= "Data acquisition parameters" + cell_format_3
 
-  if scope_title == "Krios":
-    rtf_string+= r"Apertures (C1, C2, C3)" + cell_format_4
-  else:
-    rtf_string+= r"Apertures (C1, C2)" + cell_format_4
+  #if scope_title == "Krios":
+    #rtf_string+= r"Apertures (C1, C2, C3)" + cell_format_4
+  #else:
+    #rtf_string+= r"Aperture, C2" + cell_format_4
+  rtf_string+= r"Aperture, C2" + cell_format_4
 
   rtf_string+= aperture_text + cell_format_5
   rtf_string+= r"Defocus range (\u181\'3fm, step size)" + cell_format_8
