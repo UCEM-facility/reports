@@ -260,7 +260,7 @@ def main(options):
   df_range= f"{max_df:.1f} to {min_df:.1f}"
   frames_text= str(num_frames)
   mag_wx= f"{mag_text[:3]} {mag_text[3:]} x"
-  pixel_size= get_calibration(mag_text, apix_x_text, options.calibration, can_import_xls)
+  pixel_size= get_calibration(mag_text, apix_x_text, options.calibration, can_import_xls, verbose=verbosity>=1)
   cam_exp_text= f"{float(cam_exp_text):.2f}"
 
   ## Don't show C3 for Glacios
@@ -479,7 +479,7 @@ def check_exe(search_exe, debug=False):
 
   return exe_path
 
-def get_calibration(mag_text, pxsz_text, excel_file, can_import_xls):
+def get_calibration(mag_text, pxsz_xml, excel_file, can_import_xls, verbose=True):
   """
   Get calibrated pixel size from Excel spreadsheet.
 
@@ -489,17 +489,27 @@ def get_calibration(mag_text, pxsz_text, excel_file, can_import_xls):
 
   Parameters:
     mag_text (str)
-    pxsz_text
+    pxsz_xml -- pixel read read from XML file
     excel_file
     can_import_xls
 
   Returns:
-    formatted pixel size (string)
+    formatted pixel size (string), from Excel file if possible, else original from XML file
   """
 
+  # Import libraries
+  try:
+    import pandas as pd
+    try:
+      import xlrd
+      can_import_xls=True
+    except ModuleNotFoundError:
+      print("\nWARNING! Can't find 'xlrd' module. Continuing...")
+  except ModuleNotFoundError:
+    print("\nWARNING! Can't find 'pandas' module. Continuing...")
+
   if excel_file and not can_import_xls:
-    print(f"\nWARNING! Couldn't read magnification-calibration spreadsheet '{os.path.basename(excel_file)}', continuing...")
-    print("  Please check libraries. Continuing...")
+    print(f"WARNING! Couldn't read magnification-calibration spreadsheet '{os.path.basename(excel_file)}', continuing...")
   if excel_file and can_import_xls:
     if not os.path.exists(excel_file):
       print(f"\nWARNING! Couldn't find magnification-calibration spreadsheet '{os.path.basename(excel_file)}', continuing...")
@@ -522,8 +532,10 @@ def get_calibration(mag_text, pxsz_text, excel_file, can_import_xls):
       mag_split= f"{mag_text[:3]} {mag_text[3:]}x"
       try:
         pxsz_calib= data_frame[data_frame[col1].str.contains(mag_split)][col2].iloc[0]
-        pxsz_clean= f"{float(pxsz_text)*1e10:.3f} (calib)"
-        ###printvars(['excel_file','mag_text','can_import_xls','pxsz_calib','pxsz_clean'], True, True)
+        pxsz_text= f"{float(pxsz_calib):.3f} (calib)"
+        print(f"Pixel size from XML file: {float(pxsz_xml)*1e10:.3f}")
+        print(f"Pixel size, calibrated:   {float(pxsz_calib):.3f}")
+        ###printvars(['excel_file','mag_text','can_import_xls','pxsz_calib','pxsz_text'], True, True)
       except IndexError:
         print(f"\nWARNING! Couldn't find magnification '{mag_split}' in '{os.path.basename(excel_file)}', continuing...")
         can_import_xls= False
@@ -531,9 +543,9 @@ def get_calibration(mag_text, pxsz_text, excel_file, can_import_xls):
   # End can-import IF-THEN
 
   # In case of failure, revert to uncalibrated pixel size
-  if not can_import_xls or not excel_file: pxsz_clean= f"{float(pxsz_text)*1e10:.3f} (uncalib)"
+  if not can_import_xls or not excel_file: pxsz_text= f"{float(pxsz_xml)*1e10:.3f} (uncalib)"
 
-  return pxsz_clean
+  return pxsz_text
 
 def check_negative_zero(angle_float):
   # An angle of "-0.0" looks funny
