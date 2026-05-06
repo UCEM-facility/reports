@@ -28,7 +28,7 @@ USAGE:
 
 """ % ((__file__,)*1)
 
-MODIFIED="Modified 2025 May 21"
+MODIFIED="Modified 2026 May 06"
 MAX_VERBOSITY=4
 
 def main(options):
@@ -42,6 +42,16 @@ def main(options):
     print(f"{os.path.basename(__file__)}, {MODIFIED}")
     print(f"  Top-level directory: {options.directory}")
     print(f"  Calibration file: {options.calibration}")
+
+    # If XLSX format, then check openpyxl library
+    if options.calibration:
+      if os.path.splitext(options.calibration)[1] == '.xlsx':
+        try:
+          import openpyxl
+        except ModuleNotFoundError:
+          print("ERROR!! Can't find 'openpyxl' module. Exiting...")
+          exit()
+
     print(f"  Output filename: {options.output}")
     print(f"  Skip movie scan? {options.no_scan}")
     print(f"  Show progress bar? {options.progress}")
@@ -262,15 +272,6 @@ def main(options):
   mag_wx= f"{mag_text[:3]} {mag_text[3:]} x"
   pixel_size= get_calibration(mag_text, apix_x_text, options.calibration, can_import_xls, verbose=verbosity>=1)
   cam_exp_text= f"{float(cam_exp_text):.2f}"
-
-  ## Don't show C3 for Glacios
-  #if scope_title == "Krios":
-    #aperture_text= f"{c1_text}, {c2_text}, {c3_text}"
-  #elif scope_title == "Glacios" :
-    #aperture_text= f"200, {c2_text}"
-  #else:
-    #if verbosity>=1: print(f"Don't know microscope: {scope_title}")
-    #aperture_text= f"{c1_text}, {c2_text}, {c3_text}"
 
   # Tilt range
   if min_tilt != max_tilt:
@@ -525,20 +526,29 @@ def get_calibration(mag_text, pxsz_xml, excel_file, can_import_xls, verbose=True
 
       # Assuming second column is pixel size
       col2= data_frame.keys()[1]
-      known_px_key= 'Falcon4i (Å)'
+      known_px_key= 'Calibrated pixel size (A/px)'
       if col2 != known_px_key:
         print(f"\nWARNING! Second column in spreadsheet is '{col2}' not '{known_px_key}', continuing...")
 
       mag_split= f"{mag_text[:3]} {mag_text[3:]}x"
       try:
-        pxsz_calib= data_frame[data_frame[col1].str.contains(mag_split)][col2].iloc[0]
+        ##clean_col = data_frame[col1].astype(str).str.replace(r"\s+", "", regex=True)
+        ##pxsz_calib= data_frame[clean_col.str.contains(mag_split)][col2].iloc[0]
+        pxsz_calib= data_frame[data_frame[col1].str.contains(mag_split, na=False)][col2].iloc[0]
         pxsz_text= f"{float(pxsz_calib):.3f} (calib)"
         print(f"Pixel size from XML file: {float(pxsz_xml)*1e10:.3f}")
         print(f"Pixel size, calibrated:   {float(pxsz_calib):.3f}")
         ###printvars(['excel_file','mag_text','can_import_xls','pxsz_calib','pxsz_text'], True, True)
+      except ValueError as ve:
+        print(f"\nERROR!! {type(ve).__name__}: get_calibration: `{ve}`")
+        print(data_frame[col1])
+        print("\nExiting...\n")
+        exit()
       except IndexError:
         print(f"\nWARNING! Couldn't find magnification '{mag_split}' in '{os.path.basename(excel_file)}', continuing...")
         can_import_xls= False
+        print(data_frame[col1])
+        exit()
     # End spreadsheet-exists IF-THEN
   # End can-import IF-THEN
 
